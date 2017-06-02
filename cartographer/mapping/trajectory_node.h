@@ -41,13 +41,11 @@ struct TrajectoryNode {
     sensor::CompressedRangeData range_data_3d;
 
     // Trajectory this node belongs to.
-    // TODO(macmason): The naming here is confusing because 'trajectory'
-    // doesn't seem like a good name for a Submaps*. Sort this out.
-    const Submaps* trajectory;
+    int trajectory_id;
 
-    // Transform from the 3D 'tracking' frame to the 'pose' frame of the
-    // laser, which contains roll, pitch and height for 2D. In 3D this is
-    // always identity.
+    // Transform from the 3D 'tracking' frame to the 'pose' frame of the range
+    // data, which contains roll, pitch and height for 2D. In 3D this is always
+    // identity.
     transform::Rigid3d tracking_to_pose;
   };
 
@@ -56,14 +54,6 @@ struct TrajectoryNode {
   const ConstantData* constant_data;
 
   transform::Rigid3d pose;
-};
-
-// Users will only be interested in 'trajectory_nodes'. But 'constant_data'
-// is referenced by 'trajectory_nodes'. This struct guarantees that their
-// lifetimes are bound.
-struct TrajectoryNodes {
-  std::deque<mapping::TrajectoryNode::ConstantData> constant_data;
-  std::vector<mapping::TrajectoryNode> trajectory_nodes;
 };
 
 }  // namespace mapping

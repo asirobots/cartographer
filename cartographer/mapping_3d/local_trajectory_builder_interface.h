@@ -37,8 +37,6 @@ class LocalTrajectoryBuilderInterface {
     common::Time time;
     sensor::RangeData range_data_in_tracking;
     transform::Rigid3d pose_observation;
-    kalman_filter::PoseCovariance covariance_estimate;
-    const Submaps* submaps;
     const Submap* matching_submap;
     std::vector<const Submap*> insertion_submaps;
   };
@@ -55,7 +53,7 @@ class LocalTrajectoryBuilderInterface {
                           const Eigen::Vector3d& angular_velocity) = 0;
   virtual std::unique_ptr<InsertionResult> AddRangefinderData(
       common::Time time, const Eigen::Vector3f& origin,
-      const sensor::PointCloud& ranges, int next_trajectory_node_index) = 0;
+      const sensor::PointCloud& ranges) = 0;
   virtual void AddOdometerData(common::Time time,
                                const transform::Rigid3d& pose) = 0;
 

@@ -23,8 +23,9 @@ namespace mapping_3d {
 
 GlobalTrajectoryBuilder::GlobalTrajectoryBuilder(
     const proto::LocalTrajectoryBuilderOptions& options,
-    SparsePoseGraph* sparse_pose_graph)
-    : sparse_pose_graph_(sparse_pose_graph),
+    const int trajectory_id, SparsePoseGraph* sparse_pose_graph)
+    : trajectory_id_(trajectory_id),
+      sparse_pose_graph_(sparse_pose_graph),
       local_trajectory_builder_(CreateLocalTrajectoryBuilder(options)) {}
 
 GlobalTrajectoryBuilder::~GlobalTrajectoryBuilder() {}
@@ -38,15 +39,15 @@ void GlobalTrajectoryBuilder::AddImuData(
     const Eigen::Vector3d& angular_velocity) {
   local_trajectory_builder_->AddImuData(time, linear_acceleration,
                                         angular_velocity);
-  sparse_pose_graph_->AddImuData(local_trajectory_builder_->submaps(), time,
-                                 linear_acceleration, angular_velocity);
+  sparse_pose_graph_->AddImuData(trajectory_id_, time, linear_acceleration,
+                                 angular_velocity);
 }
 
 void GlobalTrajectoryBuilder::AddRangefinderData(
     const common::Time time, const Eigen::Vector3f& origin,
     const sensor::PointCloud& ranges) {
-  auto insertion_result = local_trajectory_builder_->AddRangefinderData(
-      time, origin, ranges, sparse_pose_graph_->GetNextTrajectoryNodeIndex());
+  auto insertion_result =
+      local_trajectory_builder_->AddRangefinderData(time, origin, ranges);
 
   if (insertion_result == nullptr) {
     return;
@@ -54,9 +55,8 @@ void GlobalTrajectoryBuilder::AddRangefinderData(
 
   sparse_pose_graph_->AddScan(
       insertion_result->time, insertion_result->range_data_in_tracking,
-      insertion_result->pose_observation, insertion_result->covariance_estimate,
-      insertion_result->submaps, insertion_result->matching_submap,
-      insertion_result->insertion_submaps);
+      insertion_result->pose_observation, trajectory_id_,
+      insertion_result->matching_submap, insertion_result->insertion_submaps);
 }
 
 void GlobalTrajectoryBuilder::AddOdometerData(const common::Time time,

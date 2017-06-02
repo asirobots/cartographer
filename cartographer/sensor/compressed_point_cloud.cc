@@ -104,7 +104,7 @@ CompressedPointCloud::CompressedPointCloud(const PointCloud& point_cloud)
     int index;
   };
   using Blocks = mapping_3d::HybridGridBase<std::vector<RasterPoint>>;
-  Blocks blocks(kPrecision, Eigen::Vector3f::Zero());
+  Blocks blocks(kPrecision);
   int num_blocks = 0;
   CHECK_LE(point_cloud.size(), std::numeric_limits<int>::max());
   for (int point_index = 0; point_index < static_cast<int>(point_cloud.size());
@@ -137,9 +137,9 @@ CompressedPointCloud::CompressedPointCloud(const PointCloud& point_cloud)
     point_data_.push_back(block_coordinate.z());
     for (const RasterPoint& raster_point : raster_points) {
       point_data_.push_back((((raster_point.point.z() << kBitsPerCoordinate) +
-                         raster_point.point.y())
-                        << kBitsPerCoordinate) +
-                       raster_point.point.x());
+                              raster_point.point.y())
+                             << kBitsPerCoordinate) +
+                            raster_point.point.x());
     }
   }
   CHECK_EQ(num_blocks, 0);

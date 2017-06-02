@@ -19,7 +19,6 @@
 #include "cartographer/common/ceres_solver_options.h"
 #include "cartographer/common/make_unique.h"
 #include "cartographer/common/time.h"
-#include "cartographer/kalman_filter/pose_tracker.h"
 #include "cartographer/mapping_3d/proto/optimizing_local_trajectory_builder_options.pb.h"
 #include "cartographer/mapping_3d/rotation_cost_function.h"
 #include "cartographer/mapping_3d/scan_matching/occupied_space_cost_functor.h"
@@ -135,7 +134,7 @@ void OptimizingLocalTrajectoryBuilder::AddOdometerData(
 std::unique_ptr<OptimizingLocalTrajectoryBuilder::InsertionResult>
 OptimizingLocalTrajectoryBuilder::AddRangefinderData(
     const common::Time time, const Eigen::Vector3f& origin,
-    const sensor::PointCloud& ranges, const int next_trajectory_node_index) {
+    const sensor::PointCloud& ranges) {
   CHECK_GT(ranges.size(), 0);
 
   // TODO(hrapp): Handle misses.
@@ -144,8 +143,8 @@ OptimizingLocalTrajectoryBuilder::AddRangefinderData(
   for (const Eigen::Vector3f& hit : ranges) {
     const Eigen::Vector3f delta = hit - origin;
     const float range = delta.norm();
-    if (range >= options_.laser_min_range()) {
-      if (range <= options_.laser_max_range()) {
+    if (range >= options_.min_range()) {
+      if (range <= options_.max_range()) {
         point_cloud.push_back(hit);
       }
     }
@@ -176,7 +175,8 @@ OptimizingLocalTrajectoryBuilder::AddRangefinderData(
     batches_.push_back(
         Batch{time, point_cloud, high_resolution_filtered_points,
               low_resolution_filtered_points,
-              State{{{1., 0., 0., 0.}}, {{0., 0., 0.}}, {{0., 0., 0.}}}});
+              State(Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(),
+                    Eigen::Vector3d::Zero())});
   } else {
     const Batch& last_batch = batches_.back();
     batches_.push_back(Batch{
@@ -188,7 +188,7 @@ OptimizingLocalTrajectoryBuilder::AddRangefinderData(
   ++num_accumulated_;
 
   RemoveObsoleteSensorData();
-  return MaybeOptimize(time, next_trajectory_node_index);
+  return MaybeOptimize(time);
 }
 
 void OptimizingLocalTrajectoryBuilder::RemoveObsoleteSensorData() {
@@ -214,9 +214,21 @@ void OptimizingLocalTrajectoryBuilder::RemoveObsoleteSensorData() {
   }
 }
 
+void OptimizingLocalTrajectoryBuilder::TransformStates(
+    const transform::Rigid3d& transform) {
+  for (Batch& batch : batches_) {
+    const transform::Rigid3d new_pose = transform * batch.state.ToRigid();
+    const auto& velocity = batch.state.velocity;
+    const Eigen::Vector3d new_velocity =
+        transform.rotation() *
+        Eigen::Vector3d(velocity[0], velocity[1], velocity[2]);
+    batch.state =
+        State(new_pose.translation(), new_pose.rotation(), new_velocity);
+  }
+}
+
 std::unique_ptr<OptimizingLocalTrajectoryBuilder::InsertionResult>
-OptimizingLocalTrajectoryBuilder::MaybeOptimize(
-    const common::Time time, const int trajectory_node_index) {
+OptimizingLocalTrajectoryBuilder::MaybeOptimize(const common::Time time) {
   // TODO(hrapp): Make the number of optimizations configurable.
   if (num_accumulated_ < options_.scans_per_accumulation() &&
       num_accumulated_ % 10 != 0) {
@@ -224,6 +236,12 @@ OptimizingLocalTrajectoryBuilder::MaybeOptimize(
   }
 
   ceres::Problem problem;
+  const Submap* const matching_submap =
+      submaps_->Get(submaps_->matching_index());
+  // We transform the states in 'batches_' in place to be in the submap frame as
+  // expected by the OccupiedSpaceCostFunctor. This is reverted after solving
+  // the optimization problem.
+  TransformStates(matching_submap->local_pose.inverse());
   for (size_t i = 0; i < batches_.size(); ++i) {
     Batch& batch = batches_[i];
     problem.AddResidualBlock(
@@ -235,7 +253,7 @@ OptimizingLocalTrajectoryBuilder::MaybeOptimize(
                     std::sqrt(static_cast<double>(
                         batch.high_resolution_filtered_points.size())),
                 batch.high_resolution_filtered_points,
-                submaps_->high_resolution_matching_grid()),
+                matching_submap->high_resolution_hybrid_grid),
             batch.high_resolution_filtered_points.size()),
         nullptr, batch.state.translation.data(), batch.state.rotation.data());
     problem.AddResidualBlock(
@@ -247,15 +265,15 @@ OptimizingLocalTrajectoryBuilder::MaybeOptimize(
                     std::sqrt(static_cast<double>(
                         batch.low_resolution_filtered_points.size())),
                 batch.low_resolution_filtered_points,
-                submaps_->low_resolution_matching_grid()),
+                matching_submap->low_resolution_hybrid_grid),
             batch.low_resolution_filtered_points.size()),
         nullptr, batch.state.translation.data(), batch.state.rotation.data());
 
     if (i == 0) {
       problem.SetParameterBlockConstant(batch.state.translation.data());
+      problem.SetParameterBlockConstant(batch.state.rotation.data());
       problem.AddParameterBlock(batch.state.velocity.data(), 3);
       problem.SetParameterBlockConstant(batch.state.velocity.data());
-      problem.SetParameterBlockConstant(batch.state.rotation.data());
     } else {
       problem.SetParameterization(batch.state.rotation.data(),
                                   new ceres::QuaternionParameterization());
@@ -330,6 +348,9 @@ OptimizingLocalTrajectoryBuilder::MaybeOptimize(
 
   ceres::Solver::Summary summary;
   ceres::Solve(ceres_solver_options_, &problem, &summary);
+  // The optimized states in 'batches_' are in the submap frame and we transform
+  // them in place to be in the local SLAM frame again.
+  TransformStates(matching_submap->local_pose);
   if (num_accumulated_ < options_.scans_per_accumulation()) {
     return nullptr;
   }
@@ -349,21 +370,19 @@ OptimizingLocalTrajectoryBuilder::MaybeOptimize(
   }
 
   return AddAccumulatedRangeData(time, optimized_pose,
-                                 accumulated_range_data_in_tracking,
-                                 trajectory_node_index);
+                                 accumulated_range_data_in_tracking);
 }
 
 std::unique_ptr<OptimizingLocalTrajectoryBuilder::InsertionResult>
 OptimizingLocalTrajectoryBuilder::AddAccumulatedRangeData(
     const common::Time time, const transform::Rigid3d& optimized_pose,
-    const sensor::RangeData& range_data_in_tracking,
-    const int trajectory_node_index) {
+    const sensor::RangeData& range_data_in_tracking) {
   const sensor::RangeData filtered_range_data = {
       range_data_in_tracking.origin,
       sensor::VoxelFiltered(range_data_in_tracking.returns,
-                            options_.laser_voxel_filter_size()),
+                            options_.voxel_filter_size()),
       sensor::VoxelFiltered(range_data_in_tracking.misses,
-                            options_.laser_voxel_filter_size())};
+                            options_.voxel_filter_size())};
 
   if (filtered_range_data.returns.empty()) {
     LOG(WARNING) << "Dropped empty range data.";
@@ -375,8 +394,7 @@ OptimizingLocalTrajectoryBuilder::AddAccumulatedRangeData(
       sensor::TransformPointCloud(filtered_range_data.returns,
                                   optimized_pose.cast<float>())};
 
-  return InsertIntoSubmap(time, filtered_range_data, optimized_pose,
-                          trajectory_node_index);
+  return InsertIntoSubmap(time, filtered_range_data, optimized_pose);
 }
 
 const OptimizingLocalTrajectoryBuilder::PoseEstimate&
@@ -387,8 +405,7 @@ OptimizingLocalTrajectoryBuilder::pose_estimate() const {
 std::unique_ptr<OptimizingLocalTrajectoryBuilder::InsertionResult>
 OptimizingLocalTrajectoryBuilder::InsertIntoSubmap(
     const common::Time time, const sensor::RangeData& range_data_in_tracking,
-    const transform::Rigid3d& pose_observation,
-    const int trajectory_node_index) {
+    const transform::Rigid3d& pose_observation) {
   if (motion_filter_.IsSimilar(time, pose_observation)) {
     return nullptr;
   }
@@ -398,17 +415,17 @@ OptimizingLocalTrajectoryBuilder::InsertIntoSubmap(
   for (int insertion_index : submaps_->insertion_indices()) {
     insertion_submaps.push_back(submaps_->Get(insertion_index));
   }
+  // TODO(whess): Use an ImuTracker to track the gravity direction.
+  const Eigen::Quaterniond kFakeGravityOrientation =
+      Eigen::Quaterniond::Identity();
   submaps_->InsertRangeData(
       sensor::TransformRangeData(range_data_in_tracking,
                                  pose_observation.cast<float>()),
-      trajectory_node_index);
+      kFakeGravityOrientation);
 
-  const kalman_filter::PoseCovariance kCovariance =
-      1e-7 * kalman_filter::PoseCovariance::Identity();
-
-  return std::unique_ptr<InsertionResult>(new InsertionResult{
-      time, range_data_in_tracking, pose_observation, kCovariance,
-      submaps_.get(), matching_submap, insertion_submaps});
+  return std::unique_ptr<InsertionResult>(
+      new InsertionResult{time, range_data_in_tracking, pose_observation,
+                          matching_submap, insertion_submaps});
 }
 
 OptimizingLocalTrajectoryBuilder::State
@@ -440,10 +457,7 @@ OptimizingLocalTrajectoryBuilder::PredictState(const State& start_state,
       start_rotation * result.delta_velocity -
       gravity_constant_ * delta_time_seconds * Eigen::Vector3d::UnitZ();
 
-  return State{
-      {{orientation.w(), orientation.x(), orientation.y(), orientation.z()}},
-      {{position.x(), position.y(), position.z()}},
-      {{velocity.x(), velocity.y(), velocity.z()}}};
+  return State(position, orientation, velocity);
 }
 
 }  // namespace mapping_3d

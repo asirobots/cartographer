@@ -23,6 +23,7 @@
 
 #include "Eigen/Geometry"
 #include "cartographer/common/port.h"
+#include "cartographer/mapping/id.h"
 #include "cartographer/mapping/proto/submap_visualization.pb.h"
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping_2d/probability_grid.h"
@@ -31,6 +32,7 @@
 #include "cartographer/mapping_3d/proto/submaps_options.pb.h"
 #include "cartographer/mapping_3d/range_data_inserter.h"
 #include "cartographer/sensor/range_data.h"
+#include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
 
 namespace cartographer {
@@ -47,13 +49,11 @@ proto::SubmapsOptions CreateSubmapsOptions(
 
 struct Submap : public mapping::Submap {
   Submap(float high_resolution, float low_resolution,
-         const Eigen::Vector3f& origin);
+         const transform::Rigid3d& local_pose);
 
   HybridGrid high_resolution_hybrid_grid;
   HybridGrid low_resolution_hybrid_grid;
   bool finished = false;
-  // Indices into the nodes of the SparsePoseGraph used to visualize the submap.
-  std::vector<int> trajectory_node_indices;
 };
 
 // A container of Submaps.
@@ -67,19 +67,14 @@ class Submaps : public mapping::Submaps {
   const Submap* Get(int index) const override;
   int size() const override;
   void SubmapToProto(
-      int index, const std::vector<mapping::TrajectoryNode>& trajectory_nodes,
-      const transform::Rigid3d& global_submap_pose,
+      int index, const transform::Rigid3d& global_submap_pose,
       mapping::proto::SubmapQuery::Response* response) const override;
 
-  // Inserts 'range_data' into the Submap collection.
+  // Inserts 'range_data' into the Submap collection. 'gravity_alignment' is
+  // used for the orientation of new submaps so that the z axis approximately
+  // aligns with gravity.
   void InsertRangeData(const sensor::RangeData& range_data,
-                       int trajectory_node_index);
-
-  // Returns the 'high_resolution' HybridGrid to be used for matching.
-  const HybridGrid& high_resolution_matching_grid() const;
-
-  // Returns the 'low_resolution' HybridGrid to be used for matching.
-  const HybridGrid& low_resolution_matching_grid() const;
+                       const Eigen::Quaterniond& gravity_alignment);
 
  private:
   struct PixelData {
@@ -90,7 +85,7 @@ class Submaps : public mapping::Submaps {
     float max_probability = 0.5f;
   };
 
-  void AddSubmap(const Eigen::Vector3f& origin);
+  void AddSubmap(const transform::Rigid3d& local_pose);
 
   std::vector<PixelData> AccumulatePixelData(
       const int width, const int height, const Eigen::Array2i& min_index,
@@ -109,6 +104,8 @@ class Submaps : public mapping::Submaps {
 
   const proto::SubmapsOptions options_;
 
+  // 'submaps_' contains pointers, so that resizing the vector does not
+  // invalidate handed out Submap* pointers.
   std::vector<std::unique_ptr<Submap>> submaps_;
   RangeDataInserter range_data_inserter_;
 };
