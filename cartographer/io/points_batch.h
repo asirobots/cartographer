@@ -23,19 +23,17 @@
 
 #include "Eigen/Core"
 #include "cartographer/common/time.h"
+#include "cartographer/io/color.h"
 
 namespace cartographer {
 namespace io {
-
-// A point's color.
-using Color = std::array<uint8_t, 3>;
 
 // A number of points, captured around the same 'time' and by a
 // sensor at the same 'origin'.
 struct PointsBatch {
   PointsBatch() {
     origin = Eigen::Vector3f::Zero();
-    trajectory_index = 0;
+    trajectory_id = 0;
   }
 
   // Time at which this batch has been acquired.
@@ -49,8 +47,8 @@ struct PointsBatch {
   // is unknown.
   string frame_id;
 
-  // Trajectory index that produced this point.
-  int trajectory_index;
+  // Trajectory ID that produced this point.
+  int trajectory_id;
 
   // Geometry of the points in a metric frame.
   std::vector<Eigen::Vector3f> points;
@@ -63,7 +61,7 @@ struct PointsBatch {
   std::vector<float> intensities;
 
   // Colors are optional. If set, they are RGB values.
-  std::vector<Color> colors;
+  std::vector<FloatColor> colors;
 };
 
 // Removes the indices in 'to_remove' from 'batch'.

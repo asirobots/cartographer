@@ -20,6 +20,7 @@
 #include <array>
 #include <deque>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "Eigen/Core"
@@ -28,7 +29,7 @@
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/sparse_pose_graph.h"
 #include "cartographer/mapping/sparse_pose_graph/proto/optimization_problem_options.pb.h"
-#include "cartographer/mapping_3d/imu_integration.h"
+#include "cartographer/sensor/imu_data.h"
 
 namespace cartographer {
 namespace mapping_3d {
@@ -69,18 +70,24 @@ class OptimizationProblem {
   void SetMaxNumIterations(int32 max_num_iterations);
 
   // Computes the optimized poses.
-  void Solve(const std::vector<Constraint>& constraints);
+  void Solve(const std::vector<Constraint>& constraints,
+             const std::set<int>& frozen_trajectories);
 
   const std::vector<std::vector<NodeData>>& node_data() const;
   const std::vector<std::vector<SubmapData>>& submap_data() const;
 
  private:
+  struct TrajectoryData {
+    double gravity_constant = 9.8;
+    std::array<double, 4> imu_calibration{{1., 0., 0., 0.}};
+  };
+
   mapping::sparse_pose_graph::proto::OptimizationProblemOptions options_;
   FixZ fix_z_;
-  std::vector<std::deque<ImuData>> imu_data_;
+  std::vector<std::deque<sensor::ImuData>> imu_data_;
   std::vector<std::vector<NodeData>> node_data_;
   std::vector<std::vector<SubmapData>> submap_data_;
-  double gravity_constant_ = 9.8;
+  std::vector<TrajectoryData> trajectory_data_;
 };
 
 }  // namespace sparse_pose_graph

@@ -20,12 +20,14 @@
 #include "cartographer/io/coloring_points_processor.h"
 #include "cartographer/io/counting_points_processor.h"
 #include "cartographer/io/fixed_ratio_sampling_points_processor.h"
+#include "cartographer/io/hybrid_grid_points_processor.h"
 #include "cartographer/io/intensity_to_color_points_processor.h"
 #include "cartographer/io/min_max_range_filtering_points_processor.h"
 #include "cartographer/io/null_points_processor.h"
 #include "cartographer/io/outlier_removing_points_processor.h"
 #include "cartographer/io/pcd_writing_points_processor.h"
 #include "cartographer/io/ply_writing_points_processor.h"
+#include "cartographer/io/probability_grid_points_processor.h"
 #include "cartographer/io/xray_points_processor.h"
 #include "cartographer/io/xyz_writing_points_processor.h"
 #include "cartographer/mapping/proto/trajectory.pb.h"
@@ -58,8 +60,23 @@ void RegisterFileWritingPointsProcessor(
       });
 }
 
+template <typename PointsProcessorType>
+void RegisterFileWritingPointsProcessorWithTrajectories(
+    const std::vector<mapping::proto::Trajectory>& trajectories,
+    FileWriterFactory file_writer_factory,
+    PointsProcessorPipelineBuilder* const builder) {
+  builder->Register(
+      PointsProcessorType::kConfigurationFileActionName,
+      [&trajectories, file_writer_factory](
+          common::LuaParameterDictionary* const dictionary,
+          PointsProcessor* const next) -> std::unique_ptr<PointsProcessor> {
+        return PointsProcessorType::FromDictionary(
+            trajectories, file_writer_factory, dictionary, next);
+      });
+}
+
 void RegisterBuiltInPointsProcessors(
-    const mapping::proto::Trajectory& trajectory,
+    const std::vector<mapping::proto::Trajectory>& trajectories,
     FileWriterFactory file_writer_factory,
     PointsProcessorPipelineBuilder* builder) {
   RegisterPlainPointsProcessor<CountingPointsProcessor>(builder);
@@ -74,17 +91,13 @@ void RegisterBuiltInPointsProcessors(
       file_writer_factory, builder);
   RegisterFileWritingPointsProcessor<XyzWriterPointsProcessor>(
       file_writer_factory, builder);
-
-  // X-Ray is an odd ball since it requires the trajectory to figure out the
-  // different building levels we walked on to separate the images.
-  builder->Register(
-      XRayPointsProcessor::kConfigurationFileActionName,
-      [&trajectory, file_writer_factory](
-          common::LuaParameterDictionary* const dictionary,
-          PointsProcessor* const next) -> std::unique_ptr<PointsProcessor> {
-        return XRayPointsProcessor::FromDictionary(
-            trajectory, file_writer_factory, dictionary, next);
-      });
+  RegisterFileWritingPointsProcessor<HybridGridPointsProcessor>(
+      file_writer_factory, builder);
+  RegisterFileWritingPointsProcessorWithTrajectories<XRayPointsProcessor>(
+      trajectories, file_writer_factory, builder);
+  RegisterFileWritingPointsProcessorWithTrajectories<
+      ProbabilityGridPointsProcessor>(trajectories, file_writer_factory,
+                                      builder);
 }
 
 void PointsProcessorPipelineBuilder::Register(const std::string& name,
