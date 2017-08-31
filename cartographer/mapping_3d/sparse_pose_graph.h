@@ -38,6 +38,8 @@
 #include "cartographer/mapping_3d/sparse_pose_graph/constraint_builder.h"
 #include "cartographer/mapping_3d/sparse_pose_graph/optimization_problem.h"
 #include "cartographer/mapping_3d/submaps.h"
+#include "cartographer/sensor/fixed_frame_pose_data.h"
+#include "cartographer/sensor/odometry_data.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
@@ -63,19 +65,23 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   SparsePoseGraph(const SparsePoseGraph&) = delete;
   SparsePoseGraph& operator=(const SparsePoseGraph&) = delete;
 
-  // Adds a new 'range_data_in_tracking' observation at 'time', and a 'pose'
-  // that will later be optimized. The 'pose' was determined by scan matching
-  // against 'insertion_submaps.front()' and the scan was inserted into the
-  // 'insertion_submaps'. If 'insertion_submaps.front().finished()' is 'true',
-  // this submap was inserted into for the last time.
+  // Adds a new node with 'constant_data' and a 'pose' that will later be
+  // optimized. The 'pose' was determined by scan matching against
+  // 'insertion_submaps.front()' and the scan was inserted into the
+  // 'insertion_submaps'. If 'insertion_submaps.front().finished()' is
+  // 'true', this submap was inserted into for the last time.
   void AddScan(
-      common::Time time, const sensor::RangeData& range_data_in_tracking,
+      std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
       const transform::Rigid3d& pose, int trajectory_id,
       const std::vector<std::shared_ptr<const Submap>>& insertion_submaps)
       EXCLUDES(mutex_);
 
-  // Adds new IMU data to be used in the optimization.
   void AddImuData(int trajectory_id, const sensor::ImuData& imu_data);
+  void AddOdometerData(int trajectory_id,
+                       const sensor::OdometryData& odometry_data);
+  void AddFixedFramePoseData(
+      int trajectory_id,
+      const sensor::FixedFramePoseData& fixed_frame_pose_data);
 
   void FreezeTrajectory(int trajectory_id) override;
   void AddSubmapFromProto(int trajectory_id,
@@ -157,6 +163,10 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
 
   mapping::SparsePoseGraph::SubmapData GetSubmapDataUnderLock(
       const mapping::SubmapId& submap_id) REQUIRES(mutex_);
+
+  // Logs histograms for the translational and rotational residual of scan
+  // poses.
+  void LogResidualHistograms() REQUIRES(mutex_);
 
   const mapping::proto::SparsePoseGraphOptions options_;
   common::Mutex mutex_;

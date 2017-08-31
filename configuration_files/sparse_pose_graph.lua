@@ -17,13 +17,7 @@ SPARSE_POSE_GRAPH = {
   constraint_builder = {
     sampling_ratio = 0.3,
     max_constraint_distance = 15.,
-    adaptive_voxel_filter = {
-      max_length = 0.9,
-      min_num_points = 100,
-      max_range = 50.,
-    },
     min_score = 0.55,
-    min_low_resolution_score = 0.55,
     global_localization_min_score = 0.6,
     loop_closure_translation_weight = 1.1e4,
     loop_closure_rotation_weight = 1e5,
@@ -48,19 +42,10 @@ SPARSE_POSE_GRAPH = {
       full_resolution_depth = 3,
       rotational_histogram_size = 120,
       min_rotational_score = 0.77,
+      min_low_resolution_score = 0.55,
       linear_xy_search_window = 5.,
       linear_z_search_window = 1.,
       angular_search_window = math.rad(15.),
-    },
-    high_resolution_adaptive_voxel_filter = {
-      max_length = 2.,
-      min_num_points = 150,
-      max_range = 15.,
-    },
-    low_resolution_adaptive_voxel_filter = {
-      max_length = 4.,
-      min_num_points = 200,
-      max_range = 60.,
     },
     ceres_scan_matcher_3d = {
       occupied_space_weight_0 = 5.,
@@ -83,6 +68,8 @@ SPARSE_POSE_GRAPH = {
     rotation_weight = 3e5,
     consecutive_scan_translation_penalty_factor = 1e5,
     consecutive_scan_rotation_penalty_factor = 1e5,
+    fixed_frame_pose_translation_weight = 1e1,
+    fixed_frame_pose_rotation_weight = 1e2,
     log_solver_summary = false,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
@@ -92,4 +79,5 @@ SPARSE_POSE_GRAPH = {
   },
   max_num_final_iterations = 200,
   global_sampling_ratio = 0.003,
+  log_residual_histograms = true,
 }

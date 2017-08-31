@@ -16,14 +16,12 @@ syntax = "proto2";
 
 package cartographer.mapping.sparse_pose_graph.proto;
 
-import "cartographer/sensor/proto/adaptive_voxel_filter_options.proto";
 import "cartographer/mapping_2d/scan_matching/proto/ceres_scan_matcher_options.proto";
 import "cartographer/mapping_2d/scan_matching/proto/fast_correlative_scan_matcher_options.proto";
 import "cartographer/mapping_3d/scan_matching/proto/ceres_scan_matcher_options.proto";
 import "cartographer/mapping_3d/scan_matching/proto/fast_correlative_scan_matcher_options.proto";
 
 message ConstraintBuilderOptions {
-  // Next ID: 18
   // A constraint will be added if the proportion of added constraints to
   // potential constraints drops below this number.
   optional double sampling_ratio = 1;
@@ -31,18 +29,9 @@ message ConstraintBuilderOptions {
   // Threshold for poses to be considered near a submap.
   optional double max_constraint_distance = 2;
 
-  // This is only used for 2D.
-  // Voxel filter used to compute a sparser point cloud for matching.
-  optional sensor.proto.AdaptiveVoxelFilterOptions
-      adaptive_voxel_filter_options = 3;
-
   // Threshold for the scan match score below which a match is not considered.
   // Low scores indicate that the scan and map do not look similar.
   optional double min_score = 4;
-
-  // Threshold for the score of the low resolution grid below which a match is
-  // not considered. Only used for 3D.
-  optional double min_low_resolution_score = 17;
 
   // Threshold below which global localizations are not trusted.
   optional double global_localization_min_score = 5;
@@ -65,14 +54,6 @@ message ConstraintBuilderOptions {
       ceres_scan_matcher_options = 11;
   optional mapping_3d.scan_matching.proto.FastCorrelativeScanMatcherOptions
       fast_correlative_scan_matcher_options_3d = 10;
-
-  // Voxel filter used for high resolution, only used for 3D loop closure.
-  optional sensor.proto.AdaptiveVoxelFilterOptions
-      high_resolution_adaptive_voxel_filter_options = 15;
-
-  // Voxel filter used for low resolution, 3D loop closure refinement.
-  optional sensor.proto.AdaptiveVoxelFilterOptions
-      low_resolution_adaptive_voxel_filter_options = 16;
 
   optional mapping_3d.scan_matching.proto.CeresScanMatcherOptions
       ceres_scan_matcher_options_3d = 12;

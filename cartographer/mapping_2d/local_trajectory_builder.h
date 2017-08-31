@@ -20,31 +20,30 @@
 #include <memory>
 
 #include "cartographer/common/time.h"
-#include "cartographer/mapping/global_trajectory_builder_interface.h"
+#include "cartographer/mapping/pose_estimate.h"
 #include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/mapping_2d/proto/local_trajectory_builder_options.pb.h"
 #include "cartographer/mapping_2d/scan_matching/ceres_scan_matcher.h"
 #include "cartographer/mapping_2d/scan_matching/real_time_correlative_scan_matcher.h"
 #include "cartographer/mapping_2d/submaps.h"
 #include "cartographer/mapping_3d/motion_filter.h"
+#include "cartographer/sensor/imu_data.h"
+#include "cartographer/sensor/odometry_data.h"
+#include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/voxel_filter.h"
 #include "cartographer/transform/rigid_transform.h"
 
 namespace cartographer {
 namespace mapping_2d {
 
-// Wires up the local SLAM stack (i.e. UKF, scan matching, etc.) without loop
-// closure.
+// Wires up the local SLAM stack (i.e. pose extrapolator, scan matching, etc.)
+// without loop closure.
 class LocalTrajectoryBuilder {
  public:
-  using PoseEstimate = mapping::GlobalTrajectoryBuilderInterface::PoseEstimate;
-
   struct InsertionResult {
-    common::Time time;
+    std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data;
+    transform::Rigid2d pose_observation;
     std::vector<std::shared_ptr<const Submap>> insertion_submaps;
-    transform::Rigid3d tracking_to_tracking_2d;
-    sensor::RangeData range_data_in_tracking_2d;
-    transform::Rigid2d pose_estimate_2d;
   };
 
   explicit LocalTrajectoryBuilder(
@@ -54,12 +53,13 @@ class LocalTrajectoryBuilder {
   LocalTrajectoryBuilder(const LocalTrajectoryBuilder&) = delete;
   LocalTrajectoryBuilder& operator=(const LocalTrajectoryBuilder&) = delete;
 
-  const PoseEstimate& pose_estimate() const;
-  std::unique_ptr<InsertionResult> AddHorizontalRangeData(
+  const mapping::PoseEstimate& pose_estimate() const;
+
+  // Range data must be approximately horizontal for 2D SLAM.
+  std::unique_ptr<InsertionResult> AddRangeData(
       common::Time, const sensor::RangeData& range_data);
   void AddImuData(const sensor::ImuData& imu_data);
-  void AddOdometerData(common::Time time,
-                       const transform::Rigid3d& odometer_pose);
+  void AddOdometerData(const sensor::OdometryData& odometry_data);
 
  private:
   std::unique_ptr<InsertionResult> AddAccumulatedRangeData(
@@ -81,7 +81,7 @@ class LocalTrajectoryBuilder {
   const proto::LocalTrajectoryBuilderOptions options_;
   ActiveSubmaps active_submaps_;
 
-  PoseEstimate last_pose_estimate_;
+  mapping::PoseEstimate last_pose_estimate_;
 
   mapping_3d::MotionFilter motion_filter_;
   scan_matching::RealTimeCorrelativeScanMatcher

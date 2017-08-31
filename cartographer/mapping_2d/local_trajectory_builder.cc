@@ -17,6 +17,7 @@
 #include "cartographer/mapping_2d/local_trajectory_builder.h"
 
 #include <limits>
+#include <memory>
 
 #include "cartographer/common/make_unique.h"
 #include "cartographer/sensor/range_data.h"
@@ -81,8 +82,8 @@ void LocalTrajectoryBuilder::ScanMatch(
 }
 
 std::unique_ptr<LocalTrajectoryBuilder::InsertionResult>
-LocalTrajectoryBuilder::AddHorizontalRangeData(
-    const common::Time time, const sensor::RangeData& range_data) {
+LocalTrajectoryBuilder::AddRangeData(const common::Time time,
+                                     const sensor::RangeData& range_data) {
   // Initialize extrapolator now if we do not ever use an IMU.
   if (!options_.use_imu_data()) {
     InitializeExtrapolator(time);
@@ -181,13 +182,24 @@ LocalTrajectoryBuilder::AddAccumulatedRangeData(
       TransformRangeData(range_data_in_tracking_2d,
                          transform::Embed3D(pose_estimate_2d.cast<float>())));
 
+  sensor::AdaptiveVoxelFilter adaptive_voxel_filter(
+      options_.loop_closure_adaptive_voxel_filter_options());
+  const sensor::PointCloud filtered_point_cloud_in_tracking_2d =
+      adaptive_voxel_filter.Filter(range_data_in_tracking_2d.returns);
+
   return common::make_unique<InsertionResult>(InsertionResult{
-      time, std::move(insertion_submaps), tracking_to_tracking_2d,
-      range_data_in_tracking_2d, pose_estimate_2d});
+      std::make_shared<const mapping::TrajectoryNode::Data>(
+          mapping::TrajectoryNode::Data{
+              time,
+              {},  // 'range_data' is only used in 3D.
+              filtered_point_cloud_in_tracking_2d,
+              {},  // 'high_resolution_point_cloud' is only used in 3D.
+              {},  // 'low_resolution_point_cloud' is only used in 3D.
+              tracking_to_tracking_2d}),
+      pose_estimate_2d, std::move(insertion_submaps)});
 }
 
-const LocalTrajectoryBuilder::PoseEstimate&
-LocalTrajectoryBuilder::pose_estimate() const {
+const mapping::PoseEstimate& LocalTrajectoryBuilder::pose_estimate() const {
   return last_pose_estimate_;
 }
 
@@ -198,13 +210,13 @@ void LocalTrajectoryBuilder::AddImuData(const sensor::ImuData& imu_data) {
 }
 
 void LocalTrajectoryBuilder::AddOdometerData(
-    const common::Time time, const transform::Rigid3d& odometer_pose) {
+    const sensor::OdometryData& odometry_data) {
   if (extrapolator_ == nullptr) {
     // Until we've initialized the extrapolator we cannot add odometry data.
     LOG(INFO) << "Extrapolator not yet initialized.";
     return;
   }
-  extrapolator_->AddOdometryData(sensor::OdometryData{time, odometer_pose});
+  extrapolator_->AddOdometryData(odometry_data);
 }
 
 void LocalTrajectoryBuilder::InitializeExtrapolator(const common::Time time) {

@@ -38,6 +38,7 @@
 #include "cartographer/mapping_2d/sparse_pose_graph/constraint_builder.h"
 #include "cartographer/mapping_2d/sparse_pose_graph/optimization_problem.h"
 #include "cartographer/mapping_2d/submaps.h"
+#include "cartographer/sensor/fixed_frame_pose_data.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
@@ -63,23 +64,23 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   SparsePoseGraph(const SparsePoseGraph&) = delete;
   SparsePoseGraph& operator=(const SparsePoseGraph&) = delete;
 
-  // Adds a new 'range_data_in_pose' observation at 'time', and a 'pose' that
-  // will later be optimized. The 'tracking_to_pose' is remembered so that the
-  // optimized pose can be embedded into 3D. The 'pose' was determined by scan
-  // matching against the 'insertion_submaps.front()' and the scan was inserted
-  // into the 'insertion_submaps'. If 'insertion_submaps.front().finished()' is
+  // Adds a new node with 'constant_data' and a 'pose' that will later be
+  // optimized. The 'pose' was determined by scan matching against
+  // 'insertion_submaps.front()' and the scan was inserted into the
+  // 'insertion_submaps'. If 'insertion_submaps.front().finished()' is
   // 'true', this submap was inserted into for the last time.
   void AddScan(
-      common::Time time, const transform::Rigid3d& tracking_to_pose,
-      const sensor::RangeData& range_data_in_pose,
+      std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
       const transform::Rigid2d& pose, int trajectory_id,
       const std::vector<std::shared_ptr<const Submap>>& insertion_submaps)
       EXCLUDES(mutex_);
 
-  // Adds new IMU data to be used in the optimization.
   void AddImuData(int trajectory_id, const sensor::ImuData& imu_data);
   void AddOdometerData(int trajectory_id,
                        const sensor::OdometryData& odometry_data);
+  void AddFixedFramePoseData(
+      int trajectory_id,
+      const sensor::FixedFramePoseData& fixed_frame_pose_data);
 
   void FreezeTrajectory(int trajectory_id) override;
   void AddSubmapFromProto(int trajectory_id,
@@ -155,10 +156,9 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // Computes the local to global frame transform based on the given optimized
   // 'submap_transforms'.
   transform::Rigid3d ComputeLocalToGlobalTransform(
-      const std::vector<std::deque<sparse_pose_graph::SubmapData>>&
+      const std::vector<std::map<int, sparse_pose_graph::SubmapData>>&
           submap_transforms,
-      const std::vector<int>& num_trimmed_submaps, int trajectory_id) const
-      REQUIRES(mutex_);
+      int trajectory_id) const REQUIRES(mutex_);
 
   mapping::SparsePoseGraph::SubmapData GetSubmapDataUnderLock(
       const mapping::SubmapId& submap_id) REQUIRES(mutex_);
@@ -205,8 +205,7 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   int num_trajectory_nodes_ GUARDED_BY(mutex_) = 0;
 
   // Current submap transforms used for displaying data.
-  std::vector<int> num_trimmed_submaps_at_last_optimization_ GUARDED_BY(mutex_);
-  std::vector<std::deque<sparse_pose_graph::SubmapData>>
+  std::vector<std::map<int, sparse_pose_graph::SubmapData>>
       optimized_submap_transforms_ GUARDED_BY(mutex_);
 
   // List of all trimmers to consult when optimizations finish.

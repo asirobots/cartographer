@@ -69,13 +69,7 @@ class SparsePoseGraphTest : public ::testing::Test {
             constraint_builder = {
               sampling_ratio = 1.,
               max_constraint_distance = 6.,
-              adaptive_voxel_filter = {
-                max_length = 1e-2,
-                min_num_points = 1000,
-                max_range = 50.,
-              },
               min_score = 0.5,
-              min_low_resolution_score = 0.5,
               global_localization_min_score = 0.6,
               loop_closure_translation_weight = 1.,
               loop_closure_rotation_weight = 1.,
@@ -100,19 +94,10 @@ class SparsePoseGraphTest : public ::testing::Test {
                 full_resolution_depth = 3,
                 rotational_histogram_size = 30,
                 min_rotational_score = 0.1,
+                min_low_resolution_score = 0.5,
                 linear_xy_search_window = 4.,
                 linear_z_search_window = 4.,
                 angular_search_window = 0.1,
-              },
-              high_resolution_adaptive_voxel_filter = {
-                max_length = 2.,
-                min_num_points = 150,
-                max_range = 15.,
-              },
-              low_resolution_adaptive_voxel_filter = {
-                max_length = 4.,
-                min_num_points = 200,
-                max_range = 60.,
               },
               ceres_scan_matcher_3d = {
                 occupied_space_weight_0 = 20.,
@@ -134,6 +119,8 @@ class SparsePoseGraphTest : public ::testing::Test {
               huber_scale = 1.,
               consecutive_scan_translation_penalty_factor = 0.,
               consecutive_scan_rotation_penalty_factor = 0.,
+              fixed_frame_pose_translation_weight = 1e1,
+              fixed_frame_pose_rotation_weight = 1e2,
               log_solver_summary = true,
               ceres_solver_options = {
                 use_nonmonotonic_steps = false,
@@ -143,6 +130,7 @@ class SparsePoseGraphTest : public ::testing::Test {
             },
             max_num_final_iterations = 200,
             global_sampling_ratio = 0.01,
+            log_residual_histograms = true,
           })text");
       sparse_pose_graph_ = common::make_unique<SparsePoseGraph>(
           mapping::CreateSparsePoseGraphOptions(parameter_dictionary.get()),
@@ -170,7 +158,13 @@ class SparsePoseGraphTest : public ::testing::Test {
         range_data, transform::Embed3D(pose_estimate.cast<float>())));
 
     sparse_pose_graph_->AddScan(
-        common::FromUniversal(0), transform::Rigid3d::Identity(), range_data,
+        std::make_shared<const mapping::TrajectoryNode::Data>(
+            mapping::TrajectoryNode::Data{common::FromUniversal(0),
+                                          Compress(range_data),
+                                          range_data.returns,
+                                          {},
+                                          {},
+                                          transform::Rigid3d::Identity()}),
         pose_estimate, kTrajectoryId, insertion_submaps);
   }
 

@@ -16,6 +16,8 @@
 
 #include "cartographer/mapping_3d/local_trajectory_builder.h"
 
+#include <memory>
+
 #include "cartographer/common/make_unique.h"
 #include "cartographer/common/time.h"
 #include "cartographer/mapping_2d/scan_matching/proto/real_time_correlative_scan_matcher_options.pb.h"
@@ -56,9 +58,8 @@ void LocalTrajectoryBuilder::AddImuData(const sensor::ImuData& imu_data) {
 }
 
 std::unique_ptr<LocalTrajectoryBuilder::InsertionResult>
-LocalTrajectoryBuilder::AddRangefinderData(const common::Time time,
-                                           const Eigen::Vector3f& origin,
-                                           const sensor::PointCloud& ranges) {
+LocalTrajectoryBuilder::AddRangeData(const common::Time time,
+                                     const sensor::RangeData& range_data) {
   if (extrapolator_ == nullptr) {
     // Until we've initialized the extrapolator with our first IMU message, we
     // cannot compute the orientation of the rangefinder.
@@ -75,8 +76,7 @@ LocalTrajectoryBuilder::AddRangefinderData(const common::Time time,
       first_pose_estimate_.inverse() *
       extrapolator_->ExtrapolatePose(time).cast<float>();
   const sensor::RangeData range_data_in_first_tracking =
-      sensor::TransformRangeData(sensor::RangeData{origin, ranges, {}},
-                                 tracking_delta);
+      sensor::TransformRangeData(range_data, tracking_delta);
   for (const Eigen::Vector3f& hit : range_data_in_first_tracking.returns) {
     const Eigen::Vector3f delta = hit - range_data_in_first_tracking.origin;
     const float range = delta.norm();
@@ -131,7 +131,7 @@ LocalTrajectoryBuilder::AddAccumulatedRangeData(
   const sensor::PointCloud filtered_point_cloud_in_tracking =
       adaptive_voxel_filter.Filter(filtered_range_data.returns);
   if (options_.use_online_correlative_scan_matching()) {
-    // We take a copy since we use 'intial_ceres_pose' as an output argument.
+    // We take a copy since we use 'initial_ceres_pose' as an output argument.
     const transform::Rigid3d initial_pose = initial_ceres_pose;
     real_time_correlative_scan_matcher_->Match(
         initial_pose, filtered_point_cloud_in_tracking,
@@ -162,27 +162,30 @@ LocalTrajectoryBuilder::AddAccumulatedRangeData(
       sensor::TransformPointCloud(filtered_range_data.returns,
                                   pose_estimate.cast<float>())};
 
-  return InsertIntoSubmap(time, filtered_range_data, pose_estimate);
+  return InsertIntoSubmap(
+      time, filtered_range_data, filtered_point_cloud_in_tracking,
+      low_resolution_point_cloud_in_tracking, pose_estimate);
 }
 
 void LocalTrajectoryBuilder::AddOdometerData(
-    const common::Time time, const transform::Rigid3d& odometer_pose) {
+    const sensor::OdometryData& odometry_data) {
   if (extrapolator_ == nullptr) {
     // Until we've initialized the extrapolator we cannot add odometry data.
     LOG(INFO) << "Extrapolator not yet initialized.";
     return;
   }
-  extrapolator_->AddOdometryData(sensor::OdometryData{time, odometer_pose});
+  extrapolator_->AddOdometryData(odometry_data);
 }
 
-const LocalTrajectoryBuilder::PoseEstimate&
-LocalTrajectoryBuilder::pose_estimate() const {
+const mapping::PoseEstimate& LocalTrajectoryBuilder::pose_estimate() const {
   return last_pose_estimate_;
 }
 
 std::unique_ptr<LocalTrajectoryBuilder::InsertionResult>
 LocalTrajectoryBuilder::InsertIntoSubmap(
     const common::Time time, const sensor::RangeData& range_data_in_tracking,
+    const sensor::PointCloud& high_resolution_point_cloud,
+    const sensor::PointCloud& low_resolution_point_cloud,
     const transform::Rigid3d& pose_observation) {
   if (motion_filter_.IsSimilar(time, pose_observation)) {
     return nullptr;
@@ -197,9 +200,17 @@ LocalTrajectoryBuilder::InsertIntoSubmap(
       sensor::TransformRangeData(range_data_in_tracking,
                                  pose_observation.cast<float>()),
       extrapolator_->gravity_orientation());
-  return std::unique_ptr<InsertionResult>(
-      new InsertionResult{time, range_data_in_tracking, pose_observation,
-                          std::move(insertion_submaps)});
+  return std::unique_ptr<InsertionResult>(new InsertionResult{
+
+      std::make_shared<const mapping::TrajectoryNode::Data>(
+          mapping::TrajectoryNode::Data{
+              time,
+              sensor::Compress(range_data_in_tracking),
+              {},  // 'filtered_point_cloud' is only used in 2D.
+              high_resolution_point_cloud,
+              low_resolution_point_cloud,
+              transform::Rigid3d::Identity()}),
+      pose_observation, std::move(insertion_submaps)});
 }
 
 }  // namespace mapping_3d

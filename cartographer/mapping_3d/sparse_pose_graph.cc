@@ -93,19 +93,14 @@ std::vector<mapping::SubmapId> SparsePoseGraph::GrowSubmapTransformsAsNeeded(
 }
 
 void SparsePoseGraph::AddScan(
-    common::Time time, const sensor::RangeData& range_data_in_tracking,
+    std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
     const transform::Rigid3d& pose, const int trajectory_id,
     const std::vector<std::shared_ptr<const Submap>>& insertion_submaps) {
   const transform::Rigid3d optimized_pose(
       GetLocalToGlobalTransform(trajectory_id) * pose);
   common::MutexLocker locker(&mutex_);
   trajectory_nodes_.Append(
-      trajectory_id, mapping::TrajectoryNode{
-                         std::make_shared<const mapping::TrajectoryNode::Data>(
-                             mapping::TrajectoryNode::Data{
-                                 time, sensor::Compress(range_data_in_tracking),
-                                 transform::Rigid3d::Identity()}),
-                         optimized_pose});
+      trajectory_id, mapping::TrajectoryNode{constant_data, optimized_pose});
   ++num_trajectory_nodes_;
   trajectory_connectivity_.Add(trajectory_id);
 
@@ -155,6 +150,22 @@ void SparsePoseGraph::AddImuData(const int trajectory_id,
   });
 }
 
+void SparsePoseGraph::AddOdometerData(
+    const int trajectory_id, const sensor::OdometryData& odometry_data) {
+  // TODO(cschuet): Add support for handling OdometryData in the optimization
+  // problem.
+}
+
+void SparsePoseGraph::AddFixedFramePoseData(
+    const int trajectory_id,
+    const sensor::FixedFramePoseData& fixed_frame_pose_data) {
+  common::MutexLocker locker(&mutex_);
+  AddWorkItem([=]() REQUIRES(mutex_) {
+    optimization_problem_.AddFixedFramePoseData(trajectory_id,
+                                                fixed_frame_pose_data);
+  });
+}
+
 void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
                                         const mapping::SubmapId& submap_id) {
   CHECK(submap_data_.at(submap_id).state == SubmapState::kFinished);
@@ -196,9 +207,8 @@ void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
     // FastCorrelativeScanMatcher, and the given yaw is essentially ignored.
     constraint_builder_.MaybeAddGlobalConstraint(
         submap_id, submap_data_.at(submap_id).submap.get(), node_id,
-        &trajectory_nodes_.at(node_id).constant_data->range_data.returns,
-        submap_nodes, initial_relative_pose.rotation(),
-        &trajectory_connectivity_);
+        trajectory_nodes_.at(node_id).constant_data.get(), submap_nodes,
+        initial_relative_pose.rotation(), &trajectory_connectivity_);
   } else {
     const bool scan_and_submap_trajectories_connected =
         reverse_connected_components_.count(node_id.trajectory_id) > 0 &&
@@ -209,8 +219,8 @@ void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
         scan_and_submap_trajectories_connected) {
       constraint_builder_.MaybeAddConstraint(
           submap_id, submap_data_.at(submap_id).submap.get(), node_id,
-          &trajectory_nodes_.at(node_id).constant_data->range_data.returns,
-          submap_nodes, initial_relative_pose);
+          trajectory_nodes_.at(node_id).constant_data.get(), submap_nodes,
+          initial_relative_pose);
     }
   }
 }
@@ -423,6 +433,34 @@ void SparsePoseGraph::RunFinalOptimization() {
           .max_num_iterations());
 }
 
+void SparsePoseGraph::LogResidualHistograms() {
+  common::Histogram rotational_residual;
+  common::Histogram translational_residual;
+  for (const Constraint& constraint : constraints_) {
+    if (constraint.tag == Constraint::Tag::INTRA_SUBMAP) {
+      const cartographer::transform::Rigid3d optimized_node_to_map =
+          trajectory_nodes_.at(constraint.node_id).pose;
+      const cartographer::transform::Rigid3d node_to_submap_constraint =
+          constraint.pose.zbar_ij;
+      const cartographer::transform::Rigid3d optimized_submap_to_map =
+          optimized_submap_transforms_.at(constraint.submap_id.trajectory_id)
+              .at(constraint.submap_id.submap_index)
+              .pose;
+      const cartographer::transform::Rigid3d optimized_node_to_submap =
+          optimized_submap_to_map.inverse() * optimized_node_to_map;
+      const cartographer::transform::Rigid3d residual =
+          node_to_submap_constraint.inverse() * optimized_node_to_submap;
+      rotational_residual.Add(
+          common::NormalizeAngleDifference(transform::GetAngle(residual)));
+      translational_residual.Add(residual.translation().norm());
+    }
+  }
+  LOG(INFO) << "Translational residuals histogram:\n"
+            << translational_residual.ToString(10);
+  LOG(INFO) << "Rotational residuals histogram:\n"
+            << rotational_residual.ToString(10);
+}
+
 void SparsePoseGraph::RunOptimization() {
   if (optimization_problem_.submap_data().empty()) {
     return;
@@ -470,6 +508,11 @@ void SparsePoseGraph::RunOptimization() {
   TrimmingHandle trimming_handle(this);
   for (auto& trimmer : trimmers_) {
     trimmer->Trim(&trimming_handle);
+  }
+
+  // Log the histograms for the pose residuals.
+  if (options_.log_residual_histograms()) {
+    LogResidualHistograms();
   }
 }
 

@@ -32,12 +32,7 @@ proto::ConstraintBuilderOptions CreateConstraintBuilderOptions(
   options.set_sampling_ratio(parameter_dictionary->GetDouble("sampling_ratio"));
   options.set_max_constraint_distance(
       parameter_dictionary->GetDouble("max_constraint_distance"));
-  *options.mutable_adaptive_voxel_filter_options() =
-      sensor::CreateAdaptiveVoxelFilterOptions(
-          parameter_dictionary->GetDictionary("adaptive_voxel_filter").get());
   options.set_min_score(parameter_dictionary->GetDouble("min_score"));
-  options.set_min_low_resolution_score(
-      parameter_dictionary->GetDouble("min_low_resolution_score"));
   options.set_global_localization_min_score(
       parameter_dictionary->GetDouble("global_localization_min_score"));
   options.set_loop_closure_translation_weight(
@@ -56,16 +51,6 @@ proto::ConstraintBuilderOptions CreateConstraintBuilderOptions(
       mapping_3d::scan_matching::CreateFastCorrelativeScanMatcherOptions(
           parameter_dictionary
               ->GetDictionary("fast_correlative_scan_matcher_3d")
-              .get());
-  *options.mutable_high_resolution_adaptive_voxel_filter_options() =
-      sensor::CreateAdaptiveVoxelFilterOptions(
-          parameter_dictionary
-              ->GetDictionary("high_resolution_adaptive_voxel_filter")
-              .get());
-  *options.mutable_low_resolution_adaptive_voxel_filter_options() =
-      sensor::CreateAdaptiveVoxelFilterOptions(
-          parameter_dictionary
-              ->GetDictionary("low_resolution_adaptive_voxel_filter")
               .get());
   *options.mutable_ceres_scan_matcher_options_3d() =
       mapping_3d::scan_matching::CreateCeresScanMatcherOptions(

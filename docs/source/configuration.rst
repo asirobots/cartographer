@@ -78,6 +78,9 @@ double global_sampling_ratio
   Rate at which we sample a single trajectory's scans for global
   localization.
 
+bool log_residual_histograms
+  Whether to output histograms for the pose residuals.
+
 
 cartographer.mapping.proto.TrajectoryBuilderOptions
 ===================================================
@@ -96,24 +99,15 @@ cartographer.mapping.sparse_pose_graph.proto.ConstraintBuilderOptions
 =====================================================================
 
 double sampling_ratio
-  Next ID: 18
   A constraint will be added if the proportion of added constraints to
   potential constraints drops below this number.
 
 double max_constraint_distance
   Threshold for poses to be considered near a submap.
 
-cartographer.sensor.proto.AdaptiveVoxelFilterOptions adaptive_voxel_filter_options
-  This is only used for 2D.
-  Voxel filter used to compute a sparser point cloud for matching.
-
 double min_score
   Threshold for the scan match score below which a match is not considered.
   Low scores indicate that the scan and map do not look similar.
-
-double min_low_resolution_score
-  Threshold for the score of the low resolution grid below which a match is
-  not considered. Only used for 3D.
 
 double global_localization_min_score
   Threshold below which global localizations are not trusted.
@@ -138,12 +132,6 @@ cartographer.mapping_2d.scan_matching.proto.CeresScanMatcherOptions ceres_scan_m
 cartographer.mapping_3d.scan_matching.proto.FastCorrelativeScanMatcherOptions fast_correlative_scan_matcher_options_3d
   Not yet documented.
 
-cartographer.sensor.proto.AdaptiveVoxelFilterOptions high_resolution_adaptive_voxel_filter_options
-  Voxel filter used for high resolution, only used for 3D loop closure.
-
-cartographer.sensor.proto.AdaptiveVoxelFilterOptions low_resolution_adaptive_voxel_filter_options
-  Voxel filter used for low resolution, 3D loop closure refinement.
-
 cartographer.mapping_3d.scan_matching.proto.CeresScanMatcherOptions ceres_scan_matcher_options_3d
   Not yet documented.
 
@@ -161,10 +149,16 @@ double rotation_weight
   Scaling parameter for the IMU rotation term.
 
 double consecutive_scan_translation_penalty_factor
-  Penalty factors for changes to the relative pose between consecutive scans.
+  Penalty factors for translation changes to the relative pose between consecutive scans.
 
 double consecutive_scan_rotation_penalty_factor
-  Not yet documented.
+  Penalty factors for rotation changes to the relative pose between consecutive scans.
+
+double fixed_frame_pose_translation_weight
+  Scaling parameter for the FixedFramePose translation.
+
+double fixed_frame_pose_rotation_weight
+  Scaling parameter for the FixedFramePose rotation.
 
 bool log_solver_summary
   If true, the Ceres solver summary will be logged for every optimization.
@@ -201,6 +195,10 @@ float voxel_filter_size
 
 cartographer.sensor.proto.AdaptiveVoxelFilterOptions adaptive_voxel_filter_options
   Voxel filter used to compute a sparser point cloud for matching.
+
+cartographer.sensor.proto.AdaptiveVoxelFilterOptions loop_closure_adaptive_voxel_filter_options
+  Voxel filter used to compute a sparser point cloud for finding loop
+  closures.
 
 bool use_online_correlative_scan_matching
   Whether to solve the online scan matching first using the correlative scan
@@ -444,6 +442,10 @@ int32 rotational_histogram_size
 
 double min_rotational_score
   Minimum score for the rotational scan matcher.
+
+double min_low_resolution_score
+  Threshold for the score of the low resolution grid below which a match is
+  not considered. Only used for 3D.
 
 double linear_xy_search_window
   Linear search window in the plane orthogonal to gravity in which the best
