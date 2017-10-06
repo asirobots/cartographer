@@ -70,6 +70,7 @@ std::vector<mapping::SubmapId> SparsePoseGraph::GrowSubmapTransformsAsNeeded(
     return {submap_id};
   }
   CHECK_EQ(2, insertion_submaps.size());
+  CHECK(!submap_data.at(trajectory_id).empty());
   const mapping::SubmapId last_submap_id{
       trajectory_id, submap_data.at(trajectory_id).rbegin()->first};
   if (submap_data_.at(last_submap_id).submap == insertion_submaps.front()) {
@@ -95,16 +96,16 @@ std::vector<mapping::SubmapId> SparsePoseGraph::GrowSubmapTransformsAsNeeded(
 
 void SparsePoseGraph::AddScan(
     std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
-    const transform::Rigid3d& pose, const int trajectory_id,
+    const int trajectory_id,
     const std::vector<std::shared_ptr<const Submap>>& insertion_submaps) {
   const transform::Rigid3d optimized_pose(
-      GetLocalToGlobalTransform(trajectory_id) * pose);
+      GetLocalToGlobalTransform(trajectory_id) * constant_data->initial_pose);
 
   common::MutexLocker locker(&mutex_);
+  AddTrajectoryIfNeeded(trajectory_id);
   trajectory_nodes_.Append(
       trajectory_id, mapping::TrajectoryNode{constant_data, optimized_pose});
   ++num_trajectory_nodes_;
-  trajectory_connectivity_state_.Add(trajectory_id);
 
   // Test if the 'insertion_submap.back()' is one we never saw before.
   if (trajectory_id >= submap_data_.num_trajectories() ||
@@ -120,22 +121,12 @@ void SparsePoseGraph::AddScan(
     submap_data_.at(submap_id).submap = insertion_submaps.back();
   }
 
-  // Make sure we have a sampler for this trajectory.
-  if (!global_localization_samplers_[trajectory_id]) {
-    global_localization_samplers_[trajectory_id] =
-        common::make_unique<common::FixedRatioSampler>(
-            options_.global_sampling_ratio());
-  }
-
   // We have to check this here, because it might have changed by the time we
   // execute the lambda.
   const bool newly_finished_submap = insertion_submaps.front()->finished();
   AddWorkItem([=]() REQUIRES(mutex_) {
-    ComputeConstraintsForScan(
-        trajectory_id, insertion_submaps, newly_finished_submap,
-        transform::Project2D(pose *
-                             transform::Rigid3d::Rotation(
-                                 constant_data->gravity_alignment.inverse())));
+    ComputeConstraintsForScan(trajectory_id, insertion_submaps,
+                              newly_finished_submap);
   });
 }
 
@@ -144,6 +135,16 @@ void SparsePoseGraph::AddWorkItem(const std::function<void()>& work_item) {
     work_item();
   } else {
     work_queue_->push_back(work_item);
+  }
+}
+
+void SparsePoseGraph::AddTrajectoryIfNeeded(const int trajectory_id) {
+  trajectory_connectivity_state_.Add(trajectory_id);
+  // Make sure we have a sampler for this trajectory.
+  if (!global_localization_samplers_[trajectory_id]) {
+    global_localization_samplers_[trajectory_id] =
+        common::make_unique<common::FixedRatioSampler>(
+            options_.global_sampling_ratio());
   }
 }
 
@@ -179,8 +180,9 @@ void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
           node_id.trajectory_id, submap_id.trajectory_id);
   if (node_id.trajectory_id == submap_id.trajectory_id ||
       scan_time <
-          last_connection_time + common::FromSeconds(
-              options_.global_constraint_search_after_n_seconds())) {
+          last_connection_time +
+              common::FromSeconds(
+                  options_.global_constraint_search_after_n_seconds())) {
     // If the scan and the submap belong to the same trajectory or if there has
     // been a recent global constraint that ties that scan's trajectory to the
     // submap's trajectory, it suffices to do a match constrained to a local
@@ -225,19 +227,11 @@ void SparsePoseGraph::ComputeConstraintsForOldScans(
 void SparsePoseGraph::ComputeConstraintsForScan(
     const int trajectory_id,
     std::vector<std::shared_ptr<const Submap>> insertion_submaps,
-    const bool newly_finished_submap, const transform::Rigid2d& pose) {
+    const bool newly_finished_submap) {
   const std::vector<mapping::SubmapId> submap_ids =
       GrowSubmapTransformsAsNeeded(trajectory_id, insertion_submaps);
   CHECK_EQ(submap_ids.size(), insertion_submaps.size());
   const mapping::SubmapId matching_id = submap_ids.front();
-  const transform::Rigid2d optimized_pose =
-      optimization_problem_.submap_data()
-          .at(matching_id.trajectory_id)
-          .at(matching_id.submap_index)
-          .pose *
-      sparse_pose_graph::ComputeSubmapPose(*insertion_submaps.front())
-          .inverse() *
-      pose;
   const mapping::NodeId node_id{
       matching_id.trajectory_id,
       static_cast<size_t>(matching_id.trajectory_id) <
@@ -250,10 +244,21 @@ void SparsePoseGraph::ComputeConstraintsForScan(
                                  ->first +
                              1)
           : 0};
-  const auto& node_data = trajectory_nodes_.at(node_id).constant_data;
-  optimization_problem_.AddTrajectoryNode(matching_id.trajectory_id,
-                                          node_data->time, pose, optimized_pose,
-                                          node_data->gravity_alignment);
+  const auto& constant_data = trajectory_nodes_.at(node_id).constant_data;
+  const transform::Rigid2d pose = transform::Project2D(
+      constant_data->initial_pose *
+      transform::Rigid3d::Rotation(constant_data->gravity_alignment.inverse()));
+  const transform::Rigid2d optimized_pose =
+      optimization_problem_.submap_data()
+          .at(matching_id.trajectory_id)
+          .at(matching_id.submap_index)
+          .pose *
+      sparse_pose_graph::ComputeSubmapPose(*insertion_submaps.front())
+          .inverse() *
+      pose;
+  optimization_problem_.AddTrajectoryNode(
+      matching_id.trajectory_id, constant_data->time, pose, optimized_pose,
+      constant_data->gravity_alignment);
   for (size_t i = 0; i < insertion_submaps.size(); ++i) {
     const mapping::SubmapId submap_id = submap_ids[i];
     // Even if this was the last scan added to 'submap_id', the submap will only
@@ -308,10 +313,8 @@ void SparsePoseGraph::ComputeConstraintsForScan(
 }
 
 common::Time SparsePoseGraph::GetLatestScanTime(
-    const mapping::NodeId& node_id,
-    const mapping::SubmapId& submap_id) const {
-  common::Time time =
-      trajectory_nodes_.at(node_id).constant_data->time;
+    const mapping::NodeId& node_id, const mapping::SubmapId& submap_id) const {
+  common::Time time = trajectory_nodes_.at(node_id).constant_data->time;
   const SubmapData& submap_data = submap_data_.at(submap_id);
   if (!submap_data.node_ids.empty()) {
     const mapping::NodeId last_submap_node_id =
@@ -355,13 +358,13 @@ void SparsePoseGraph::HandleWorkQueue() {
         run_loop_closure_ = false;
         while (!run_loop_closure_) {
           if (work_queue_->empty()) {
-            LOG(INFO) << "We caught up. Hooray!";
             work_queue_.reset();
             return;
           }
           work_queue_->front()();
           work_queue_->pop_front();
         }
+        LOG(INFO) << "Remaining work items in queue: " << work_queue_->size();
         // We have to optimize again.
         HandleWorkQueue();
       });
@@ -380,19 +383,21 @@ void SparsePoseGraph::WaitForAllComputations() {
       common::FromSeconds(1.))) {
     std::ostringstream progress_info;
     progress_info << "Optimizing: " << std::fixed << std::setprecision(1)
-                  << 100. * (constraint_builder_.GetNumFinishedScans() -
-                             num_finished_scans_at_start) /
+                  << 100. *
+                         (constraint_builder_.GetNumFinishedScans() -
+                          num_finished_scans_at_start) /
                          (num_trajectory_nodes_ - num_finished_scans_at_start)
                   << "%...";
     std::cout << "\r\x1b[K" << progress_info.str() << std::flush;
   }
   std::cout << "\r\x1b[KOptimizing: Done.     " << std::endl;
-  constraint_builder_.WhenDone([this, &notification](
-      const sparse_pose_graph::ConstraintBuilder::Result& result) {
-    common::MutexLocker locker(&mutex_);
-    constraints_.insert(constraints_.end(), result.begin(), result.end());
-    notification = true;
-  });
+  constraint_builder_.WhenDone(
+      [this, &notification](
+          const sparse_pose_graph::ConstraintBuilder::Result& result) {
+        common::MutexLocker locker(&mutex_);
+        constraints_.insert(constraints_.end(), result.begin(), result.end());
+        notification = true;
+      });
   locker.Await([&notification]() { return notification; });
 }
 
@@ -417,7 +422,7 @@ void SparsePoseGraph::AddSubmapFromProto(const int trajectory_id,
   const transform::Rigid2d initial_pose_2d = transform::Project2D(initial_pose);
 
   common::MutexLocker locker(&mutex_);
-  trajectory_connectivity_state_.Add(trajectory_id);
+  AddTrajectoryIfNeeded(trajectory_id);
   const mapping::SubmapId submap_id =
       submap_data_.Append(trajectory_id, SubmapData());
   submap_data_.at(submap_id).submap = submap_ptr;
@@ -434,6 +439,32 @@ void SparsePoseGraph::AddSubmapFromProto(const int trajectory_id,
     CHECK_EQ(frozen_trajectories_.count(submap_id.trajectory_id), 1);
     submap_data_.at(submap_id).state = SubmapState::kFinished;
     optimization_problem_.AddSubmap(submap_id.trajectory_id, initial_pose_2d);
+  });
+}
+
+void SparsePoseGraph::AddNodeFromProto(const int trajectory_id,
+                                       const transform::Rigid3d& pose,
+                                       const mapping::proto::Node& node) {
+  std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data =
+      std::make_shared<const mapping::TrajectoryNode::Data>(
+          mapping::FromProto(node.node_data()));
+
+  common::MutexLocker locker(&mutex_);
+  AddTrajectoryIfNeeded(trajectory_id);
+  const mapping::NodeId node_id = trajectory_nodes_.Append(
+      trajectory_id, mapping::TrajectoryNode{constant_data, pose});
+
+  AddWorkItem([this, node_id, pose]() REQUIRES(mutex_) {
+    CHECK_EQ(frozen_trajectories_.count(node_id.trajectory_id), 1);
+    const auto& constant_data = trajectory_nodes_.at(node_id).constant_data;
+    const auto gravity_alignment_inverse = transform::Rigid3d::Rotation(
+        constant_data->gravity_alignment.inverse());
+    optimization_problem_.AddTrajectoryNode(
+        node_id.trajectory_id, constant_data->time,
+        transform::Project2D(constant_data->initial_pose *
+                             gravity_alignment_inverse),
+        transform::Project2D(pose * gravity_alignment_inverse),
+        constant_data->gravity_alignment);
   });
 }
 

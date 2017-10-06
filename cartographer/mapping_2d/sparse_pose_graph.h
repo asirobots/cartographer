@@ -39,6 +39,7 @@
 #include "cartographer/mapping_2d/sparse_pose_graph/optimization_problem.h"
 #include "cartographer/mapping_2d/submaps.h"
 #include "cartographer/sensor/fixed_frame_pose_data.h"
+#include "cartographer/sensor/odometry_data.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
@@ -71,7 +72,7 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // 'true', this submap was inserted into for the last time.
   void AddScan(
       std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
-      const transform::Rigid3d& pose, int trajectory_id,
+      int trajectory_id,
       const std::vector<std::shared_ptr<const Submap>>& insertion_submaps)
       EXCLUDES(mutex_);
 
@@ -86,6 +87,8 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   void AddSubmapFromProto(int trajectory_id,
                           const transform::Rigid3d& initial_pose,
                           const mapping::proto::Submap& submap) override;
+  void AddNodeFromProto(int trajectory_id, const transform::Rigid3d& pose,
+                        const mapping::proto::Node& node) override;
   void AddTrimmer(std::unique_ptr<mapping::PoseGraphTrimmer> trimmer) override;
   void RunFinalOptimization() override;
   std::vector<std::vector<int>> GetConnectedTrajectories() override;
@@ -99,9 +102,6 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   std::vector<std::vector<mapping::TrajectoryNode>> GetTrajectoryNodes()
       override EXCLUDES(mutex_);
   std::vector<Constraint> constraints() override EXCLUDES(mutex_);
-  common::Time GetLatestScanTime(const mapping::NodeId& node_id,
-                                 const mapping::SubmapId& submap_id) const
-      REQUIRES(mutex_);
 
  private:
   // The current state of the submap in the background threads. When this
@@ -122,6 +122,9 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // Handles a new work item.
   void AddWorkItem(const std::function<void()>& work_item) REQUIRES(mutex_);
 
+  // Adds connectivity and sampler for a trajectory if it does not exist.
+  void AddTrajectoryIfNeeded(int trajectory_id) REQUIRES(mutex_);
+
   // Grows the optimization problem to have an entry for every element of
   // 'insertion_submaps'. Returns the IDs for the 'insertion_submaps'.
   std::vector<mapping::SubmapId> GrowSubmapTransformsAsNeeded(
@@ -133,8 +136,7 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   void ComputeConstraintsForScan(
       int trajectory_id,
       std::vector<std::shared_ptr<const Submap>> insertion_submaps,
-      bool newly_finished_submap, const transform::Rigid2d& pose)
-      REQUIRES(mutex_);
+      bool newly_finished_submap) REQUIRES(mutex_);
 
   // Computes constraints for a scan and submap pair.
   void ComputeConstraint(const mapping::NodeId& node_id,
@@ -156,11 +158,6 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // optimization being run at a time.
   void RunOptimization() EXCLUDES(mutex_);
 
-  // Updates the trajectory connectivity structure with the new constraints.
-  void UpdateTrajectoryConnectivity(
-      const sparse_pose_graph::ConstraintBuilder::Result& result)
-      REQUIRES(mutex_);
-
   // Computes the local to global frame transform based on the given optimized
   // 'submap_transforms'.
   transform::Rigid3d ComputeLocalToGlobalTransform(
@@ -170,6 +167,15 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
 
   mapping::SparsePoseGraph::SubmapData GetSubmapDataUnderLock(
       const mapping::SubmapId& submap_id) REQUIRES(mutex_);
+
+  common::Time GetLatestScanTime(const mapping::NodeId& node_id,
+                                 const mapping::SubmapId& submap_id) const
+      REQUIRES(mutex_);
+
+  // Updates the trajectory connectivity structure with the new constraints.
+  void UpdateTrajectoryConnectivity(
+      const sparse_pose_graph::ConstraintBuilder::Result& result)
+      REQUIRES(mutex_);
 
   const mapping::proto::SparsePoseGraphOptions options_;
   common::Mutex mutex_;

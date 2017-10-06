@@ -94,16 +94,16 @@ std::vector<mapping::SubmapId> SparsePoseGraph::GrowSubmapTransformsAsNeeded(
 
 void SparsePoseGraph::AddScan(
     std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
-    const transform::Rigid3d& pose, const int trajectory_id,
+    const int trajectory_id,
     const std::vector<std::shared_ptr<const Submap>>& insertion_submaps) {
   const transform::Rigid3d optimized_pose(
-      GetLocalToGlobalTransform(trajectory_id) * pose);
+      GetLocalToGlobalTransform(trajectory_id) * constant_data->initial_pose);
 
   common::MutexLocker locker(&mutex_);
+  AddTrajectoryIfNeeded(trajectory_id);
   trajectory_nodes_.Append(
       trajectory_id, mapping::TrajectoryNode{constant_data, optimized_pose});
   ++num_trajectory_nodes_;
-  trajectory_connectivity_state_.Add(trajectory_id);
 
   // Test if the 'insertion_submap.back()' is one we never saw before.
   if (trajectory_id >= submap_data_.num_trajectories() ||
@@ -119,19 +119,12 @@ void SparsePoseGraph::AddScan(
     submap_data_.at(submap_id).submap = insertion_submaps.back();
   }
 
-  // Make sure we have a sampler for this trajectory.
-  if (!global_localization_samplers_[trajectory_id]) {
-    global_localization_samplers_[trajectory_id] =
-        common::make_unique<common::FixedRatioSampler>(
-            options_.global_sampling_ratio());
-  }
-
   // We have to check this here, because it might have changed by the time we
   // execute the lambda.
   const bool newly_finished_submap = insertion_submaps.front()->finished();
   AddWorkItem([=]() REQUIRES(mutex_) {
     ComputeConstraintsForScan(trajectory_id, insertion_submaps,
-                              newly_finished_submap, pose);
+                              newly_finished_submap);
   });
 }
 
@@ -140,6 +133,16 @@ void SparsePoseGraph::AddWorkItem(const std::function<void()>& work_item) {
     work_item();
   } else {
     work_queue_->push_back(work_item);
+  }
+}
+
+void SparsePoseGraph::AddTrajectoryIfNeeded(const int trajectory_id) {
+  trajectory_connectivity_state_.Add(trajectory_id);
+  // Make sure we have a sampler for this trajectory.
+  if (!global_localization_samplers_[trajectory_id]) {
+    global_localization_samplers_[trajectory_id] =
+        common::make_unique<common::FixedRatioSampler>(
+            options_.global_sampling_ratio());
   }
 }
 
@@ -199,8 +202,9 @@ void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
           node_id.trajectory_id, submap_id.trajectory_id);
   if (node_id.trajectory_id == submap_id.trajectory_id ||
       scan_time <
-          last_connection_time + common::FromSeconds(
-              options_.global_constraint_search_after_n_seconds())) {
+          last_connection_time +
+              common::FromSeconds(
+                  options_.global_constraint_search_after_n_seconds())) {
     // If the scan and the submap belong to the same trajectory or if there has
     // been a recent global constraint that ties that scan's trajectory to the
     // submap's trajectory, it suffices to do a match constrained to a local
@@ -210,22 +214,22 @@ void SparsePoseGraph::ComputeConstraint(const mapping::NodeId& node_id,
         trajectory_nodes_.at(node_id).constant_data.get(), submap_nodes,
         initial_relative_pose);
   } else if (global_localization_samplers_[node_id.trajectory_id]->Pulse()) {
-      // In this situation, 'initial_relative_pose' is:
-      //
-      // submap <- global map 2 <- global map 1 <- tracking
-      //               (agreeing on gravity)
-      //
-      // Since they possibly came from two disconnected trajectories, the only
-      // guaranteed connection between the tracking and the submap frames is
-      // an agreement on the direction of gravity. Therefore, excluding yaw,
-      // 'initial_relative_pose.rotation()' is a good estimate of the relative
-      // orientation of the point cloud in the submap frame. Finding the correct
-      // yaw component will be handled by the matching procedure in the
-      // FastCorrelativeScanMatcher, and the given yaw is essentially ignored.
-      constraint_builder_.MaybeAddGlobalConstraint(
-          submap_id, submap_data_.at(submap_id).submap.get(), node_id,
-          trajectory_nodes_.at(node_id).constant_data.get(), submap_nodes,
-          initial_relative_pose.rotation());
+    // In this situation, 'initial_relative_pose' is:
+    //
+    // submap <- global map 2 <- global map 1 <- tracking
+    //               (agreeing on gravity)
+    //
+    // Since they possibly came from two disconnected trajectories, the only
+    // guaranteed connection between the tracking and the submap frames is
+    // an agreement on the direction of gravity. Therefore, excluding yaw,
+    // 'initial_relative_pose.rotation()' is a good estimate of the relative
+    // orientation of the point cloud in the submap frame. Finding the correct
+    // yaw component will be handled by the matching procedure in the
+    // FastCorrelativeScanMatcher, and the given yaw is essentially ignored.
+    constraint_builder_.MaybeAddGlobalConstraint(
+        submap_id, submap_data_.at(submap_id).submap.get(), node_id,
+        trajectory_nodes_.at(node_id).constant_data.get(), submap_nodes,
+        initial_relative_pose.rotation());
   }
 }
 
@@ -238,6 +242,7 @@ void SparsePoseGraph::ComputeConstraintsForOldScans(
     for (const auto& index_node_data : node_data[trajectory_id]) {
       const mapping::NodeId node_id{static_cast<int>(trajectory_id),
                                     index_node_data.first};
+      CHECK(!trajectory_nodes_.at(node_id).trimmed());
       if (submap_data.node_ids.count(node_id) == 0) {
         ComputeConstraint(node_id, submap_id);
       }
@@ -248,17 +253,11 @@ void SparsePoseGraph::ComputeConstraintsForOldScans(
 void SparsePoseGraph::ComputeConstraintsForScan(
     const int trajectory_id,
     std::vector<std::shared_ptr<const Submap>> insertion_submaps,
-    const bool newly_finished_submap, const transform::Rigid3d& pose) {
+    const bool newly_finished_submap) {
   const std::vector<mapping::SubmapId> submap_ids =
       GrowSubmapTransformsAsNeeded(trajectory_id, insertion_submaps);
   CHECK_EQ(submap_ids.size(), insertion_submaps.size());
   const mapping::SubmapId matching_id = submap_ids.front();
-  const transform::Rigid3d optimized_pose =
-      optimization_problem_.submap_data()
-          .at(matching_id.trajectory_id)
-          .at(matching_id.submap_index)
-          .pose *
-      insertion_submaps.front()->local_pose().inverse() * pose;
   const mapping::NodeId node_id{
       matching_id.trajectory_id,
       static_cast<size_t>(matching_id.trajectory_id) <
@@ -271,9 +270,16 @@ void SparsePoseGraph::ComputeConstraintsForScan(
                                  ->first +
                              1)
           : 0};
-  const auto& scan_data = trajectory_nodes_.at(node_id).constant_data;
+  const auto& constant_data = trajectory_nodes_.at(node_id).constant_data;
+  const transform::Rigid3d& pose = constant_data->initial_pose;
+  const transform::Rigid3d optimized_pose =
+      optimization_problem_.submap_data()
+          .at(matching_id.trajectory_id)
+          .at(matching_id.submap_index)
+          .pose *
+      insertion_submaps.front()->local_pose().inverse() * pose;
   optimization_problem_.AddTrajectoryNode(
-      matching_id.trajectory_id, scan_data->time, pose, optimized_pose);
+      matching_id.trajectory_id, constant_data->time, pose, optimized_pose);
   for (size_t i = 0; i < insertion_submaps.size(); ++i) {
     const mapping::SubmapId submap_id = submap_ids[i];
     // Even if this was the last scan added to 'submap_id', the submap will only
@@ -327,10 +333,8 @@ void SparsePoseGraph::ComputeConstraintsForScan(
 }
 
 common::Time SparsePoseGraph::GetLatestScanTime(
-    const mapping::NodeId& node_id,
-    const mapping::SubmapId& submap_id) const {
-  common::Time time =
-      trajectory_nodes_.at(node_id).constant_data->time;
+    const mapping::NodeId& node_id, const mapping::SubmapId& submap_id) const {
+  common::Time time = trajectory_nodes_.at(node_id).constant_data->time;
   const SubmapData& submap_data = submap_data_.at(submap_id);
   if (!submap_data.node_ids.empty()) {
     const mapping::NodeId last_submap_node_id =
@@ -374,13 +378,13 @@ void SparsePoseGraph::HandleWorkQueue() {
         run_loop_closure_ = false;
         while (!run_loop_closure_) {
           if (work_queue_->empty()) {
-            LOG(INFO) << "We caught up. Hooray!";
             work_queue_.reset();
             return;
           }
           work_queue_->front()();
           work_queue_->pop_front();
         }
+        LOG(INFO) << "Remaining work items in queue: " << work_queue_->size();
         // We have to optimize again.
         HandleWorkQueue();
       });
@@ -437,7 +441,7 @@ void SparsePoseGraph::AddSubmapFromProto(const int trajectory_id,
       std::make_shared<const Submap>(submap.submap_3d());
 
   common::MutexLocker locker(&mutex_);
-  trajectory_connectivity_state_.Add(trajectory_id);
+  AddTrajectoryIfNeeded(trajectory_id);
   const mapping::SubmapId submap_id =
       submap_data_.Append(trajectory_id, SubmapData());
   submap_data_.at(submap_id).submap = submap_ptr;
@@ -454,6 +458,27 @@ void SparsePoseGraph::AddSubmapFromProto(const int trajectory_id,
     CHECK_EQ(frozen_trajectories_.count(submap_id.trajectory_id), 1);
     submap_data_.at(submap_id).state = SubmapState::kFinished;
     optimization_problem_.AddSubmap(submap_id.trajectory_id, initial_pose);
+  });
+}
+
+void SparsePoseGraph::AddNodeFromProto(const int trajectory_id,
+                                       const transform::Rigid3d& pose,
+                                       const mapping::proto::Node& node) {
+  std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data =
+      std::make_shared<const mapping::TrajectoryNode::Data>(
+          mapping::FromProto(node.node_data()));
+
+  common::MutexLocker locker(&mutex_);
+  AddTrajectoryIfNeeded(trajectory_id);
+  const mapping::NodeId node_id = trajectory_nodes_.Append(
+      trajectory_id, mapping::TrajectoryNode{constant_data, pose});
+
+  AddWorkItem([this, node_id, pose]() REQUIRES(mutex_) {
+    CHECK_EQ(frozen_trajectories_.count(node_id.trajectory_id), 1);
+    const auto& constant_data = trajectory_nodes_.at(node_id).constant_data;
+    optimization_problem_.AddTrajectoryNode(node_id.trajectory_id,
+                                            constant_data->time,
+                                            constant_data->initial_pose, pose);
   });
 }
 
@@ -626,6 +651,9 @@ transform::Rigid3d SparsePoseGraph::ComputeLocalToGlobalTransform(
 
 mapping::SparsePoseGraph::SubmapData SparsePoseGraph::GetSubmapDataUnderLock(
     const mapping::SubmapId& submap_id) {
+  if (submap_data_.at(submap_id).state == SubmapState::kTrimmed) {
+    return {};
+  }
   auto submap = submap_data_.at(submap_id).submap;
   if (submap_id.trajectory_id <
           static_cast<int>(optimized_submap_transforms_.size()) &&
@@ -648,12 +676,68 @@ SparsePoseGraph::TrimmingHandle::TrimmingHandle(SparsePoseGraph* const parent)
 
 int SparsePoseGraph::TrimmingHandle::num_submaps(
     const int trajectory_id) const {
-  LOG(FATAL) << "Not yet implemented for 3D.";
+  return parent_->optimization_problem_.submap_data().at(trajectory_id).size();
 }
 
 void SparsePoseGraph::TrimmingHandle::MarkSubmapAsTrimmed(
     const mapping::SubmapId& submap_id) {
-  LOG(FATAL) << "Not yet implemented for 3D.";
+  // TODO(hrapp): We have to make sure that the trajectory has been finished
+  // if we want to delete the last submaps.
+  CHECK(parent_->submap_data_.at(submap_id).state == SubmapState::kFinished);
+
+  // Compile all nodes that are still INTRA_SUBMAP constrained once the submap
+  // with 'submap_id' is gone.
+  std::set<mapping::NodeId> nodes_to_retain;
+  for (const Constraint& constraint : parent_->constraints_) {
+    if (constraint.tag == Constraint::Tag::INTRA_SUBMAP &&
+        constraint.submap_id != submap_id) {
+      nodes_to_retain.insert(constraint.node_id);
+    }
+  }
+  // Remove all 'constraints_' related to 'submap_id'.
+  std::set<mapping::NodeId> nodes_to_remove;
+  {
+    std::vector<Constraint> constraints;
+    for (const Constraint& constraint : parent_->constraints_) {
+      if (constraint.submap_id == submap_id) {
+        if (constraint.tag == Constraint::Tag::INTRA_SUBMAP &&
+            nodes_to_retain.count(constraint.node_id) == 0) {
+          // This node will no longer be INTRA_SUBMAP contrained and has to be
+          // removed.
+          nodes_to_remove.insert(constraint.node_id);
+        }
+      } else {
+        constraints.push_back(constraint);
+      }
+    }
+    parent_->constraints_ = std::move(constraints);
+  }
+  // Remove all 'constraints_' related to 'nodes_to_remove'.
+  {
+    std::vector<Constraint> constraints;
+    for (const Constraint& constraint : parent_->constraints_) {
+      if (nodes_to_remove.count(constraint.node_id) == 0) {
+        constraints.push_back(constraint);
+      }
+    }
+    parent_->constraints_ = std::move(constraints);
+  }
+
+  // Mark the submap with 'submap_id' as trimmed and remove its data.
+  auto& submap_data = parent_->submap_data_.at(submap_id);
+  CHECK(submap_data.state == SubmapState::kFinished);
+  submap_data.state = SubmapState::kTrimmed;
+  CHECK(submap_data.submap != nullptr);
+  submap_data.submap.reset();
+  parent_->constraint_builder_.DeleteScanMatcher(submap_id);
+  parent_->optimization_problem_.TrimSubmap(submap_id);
+
+  // Mark the 'nodes_to_remove' as trimmed and remove their data.
+  for (const mapping::NodeId& node_id : nodes_to_remove) {
+    CHECK(!parent_->trajectory_nodes_.at(node_id).trimmed());
+    parent_->trajectory_nodes_.at(node_id).constant_data.reset();
+    parent_->optimization_problem_.TrimTrajectoryNode(node_id);
+  }
 }
 
 }  // namespace mapping_3d

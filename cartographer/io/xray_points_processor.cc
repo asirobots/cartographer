@@ -127,7 +127,7 @@ std::unique_ptr<XRayPointsProcessor> XRayPointsProcessor::FromDictionary(
                                      ? DrawTrajectories::kYes
                                      : DrawTrajectories::kNo;
   if (separate_floor) {
-    CHECK_EQ(trajectories.size(), 0)
+    CHECK_EQ(trajectories.size(), 1)
         << "Can only detect floors with a single trajectory.";
     floors = mapping::DetectFloors(trajectories.at(0));
   }
@@ -216,7 +216,7 @@ void XRayPointsProcessor::Process(std::unique_ptr<PointsBatch> batch) {
     Insert(*batch, &aggregations_[0]);
   } else {
     for (size_t i = 0; i < floors_.size(); ++i) {
-      if (!ContainedIn(batch->time, floors_[i].timespans)) {
+      if (!ContainedIn(batch->start_time, floors_[i].timespans)) {
         continue;
       }
       Insert(*batch, &aggregations_[i]);

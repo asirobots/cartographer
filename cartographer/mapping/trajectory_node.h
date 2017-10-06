@@ -22,7 +22,7 @@
 
 #include "Eigen/Core"
 #include "cartographer/common/time.h"
-#include "cartographer/mapping/proto/trajectory_node.pb.h"
+#include "cartographer/mapping/proto/trajectory_node_data.pb.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/transform/rigid_transform.h"
 
@@ -45,6 +45,9 @@ struct TrajectoryNode {
     sensor::PointCloud high_resolution_point_cloud;
     sensor::PointCloud low_resolution_point_cloud;
     Eigen::VectorXf rotational_scan_matcher_histogram;
+
+    // The initial unoptimized node pose.
+    transform::Rigid3d initial_pose;
   };
 
   common::Time time() const { return constant_data->time; }
@@ -57,8 +60,8 @@ struct TrajectoryNode {
   transform::Rigid3d pose;
 };
 
-proto::TrajectoryNode ToProto(const TrajectoryNode::Data& constant_data);
-TrajectoryNode::Data FromProto(const proto::TrajectoryNode& proto);
+proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data);
+TrajectoryNode::Data FromProto(const proto::TrajectoryNodeData& proto);
 
 }  // namespace mapping
 }  // namespace cartographer

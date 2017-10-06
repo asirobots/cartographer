@@ -19,8 +19,8 @@ package cartographer.mapping.proto;
 import "cartographer/sensor/proto/sensor.proto";
 import "cartographer/transform/proto/transform.proto";
 
-// Serialized state of a mapping::TrajectoryNode.
-message TrajectoryNode {
+// Serialized state of a mapping::TrajectoryNode::Data.
+message TrajectoryNodeData {
   optional int64 timestamp = 1;
   optional transform.proto.Quaterniond gravity_alignment = 2;
   optional sensor.proto.CompressedPointCloud
@@ -28,4 +28,5 @@ message TrajectoryNode {
   optional sensor.proto.CompressedPointCloud high_resolution_point_cloud = 4;
   optional sensor.proto.CompressedPointCloud low_resolution_point_cloud = 5;
   repeated float rotational_scan_matcher_histogram = 6;
+  optional transform.proto.Rigid3d initial_pose = 7;
 }

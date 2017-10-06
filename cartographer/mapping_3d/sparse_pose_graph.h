@@ -72,7 +72,7 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // 'true', this submap was inserted into for the last time.
   void AddScan(
       std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data,
-      const transform::Rigid3d& pose, int trajectory_id,
+      int trajectory_id,
       const std::vector<std::shared_ptr<const Submap>>& insertion_submaps)
       EXCLUDES(mutex_);
 
@@ -87,6 +87,8 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   void AddSubmapFromProto(int trajectory_id,
                           const transform::Rigid3d& initial_pose,
                           const mapping::proto::Submap& submap) override;
+  void AddNodeFromProto(int trajectory_id, const transform::Rigid3d& pose,
+                        const mapping::proto::Node& node) override;
   void AddTrimmer(std::unique_ptr<mapping::PoseGraphTrimmer> trimmer) override;
   void RunFinalOptimization() override;
   std::vector<std::vector<int>> GetConnectedTrajectories() override;
@@ -120,6 +122,9 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   // Handles a new work item.
   void AddWorkItem(const std::function<void()>& work_item) REQUIRES(mutex_);
 
+  // Adds connectivity and sampler for a trajectory if it does not exist.
+  void AddTrajectoryIfNeeded(int trajectory_id) REQUIRES(mutex_);
+
   // Grows the optimization problem to have an entry for every element of
   // 'insertion_submaps'. Returns the IDs for the 'insertion_submaps'.
   std::vector<mapping::SubmapId> GrowSubmapTransformsAsNeeded(
@@ -131,8 +136,7 @@ class SparsePoseGraph : public mapping::SparsePoseGraph {
   void ComputeConstraintsForScan(
       int trajectory_id,
       std::vector<std::shared_ptr<const Submap>> insertion_submaps,
-      bool newly_finished_submap, const transform::Rigid3d& pose)
-      REQUIRES(mutex_);
+      bool newly_finished_submap) REQUIRES(mutex_);
 
   // Computes constraints for a scan and submap pair.
   void ComputeConstraint(const mapping::NodeId& node_id,
